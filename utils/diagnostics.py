@@ -95,14 +95,12 @@ def evaluate_model(
 
     metrics = {
         "accuracy": report["accuracy"],
-        # CORRECTED: Use string keys "0.0" and "1.0"
         "precision_0": report["0.0"]["precision"] if "0.0" in report else 0.0,
         "recall_0": report["0.0"]["recall"] if "0.0" in report else 0.0,
         "f1_0": report["0.0"]["f1-score"] if "0.0" in report else 0.0,
         "precision_1": report["1.0"]["precision"] if "1.0" in report else 0.0,
         "recall_1": report["1.0"]["recall"] if "1.0" in report else 0.0,
         "f1_1": report["1.0"]["f1-score"] if "1.0" in report else 0.0,
-        # These were already correct
         "precision_weighted": report["weighted avg"]["precision"],
         "recall_weighted": report["weighted avg"]["recall"],
         "f1_weighted": report["weighted avg"]["f1-score"],
