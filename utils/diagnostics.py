@@ -17,6 +17,7 @@ and utilize popular libraries like numpy, sklearn, matplotlib, and seaborn
 for numerical operations, metric calculation, and plotting.
 """
 
+import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -153,7 +154,20 @@ def plot_confusion_matrix(
     plt.title("Confusion Matrix")
     plt.ylabel("True Label")
     plt.xlabel("Predicted Label")
+
+    # --- Save the plot as SVG if save_path is provided ---
+    save_path = "plots/confusion_matrix.svg"
+    if save_path:
+        # Ensure the directory exists
+        output_dir = os.path.dirname(save_path)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        plt.savefig(save_path, format='svg', bbox_inches='tight')
+        print(f"Confusion matrix saved to {save_path}")
+    # --- End save plot ---
+    
     plt.show()
+    
 
 
 def plot_roc_curve(labels: np.ndarray, probs: np.ndarray):
