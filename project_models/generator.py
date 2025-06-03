@@ -2,8 +2,8 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from tokenizers import Tokenizer
-
 
 class Generator(nn.Module):
     """
@@ -52,48 +52,53 @@ class Generator(nn.Module):
         # driven by the initial hidden state (from noise) and the GRU's recurrence.
         self.learned_input = nn.Parameter(torch.randn(1, 1, hidden_dim))
 
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
+
+    def forward(
+        self, 
+        z: torch.Tensor, 
+        temperature: float = 1.0,  # Controls sampling sharpness (higher = more random)
+        hard: bool = False,        # If True, returns one-hot vectors (straight-through)
+    ) -> torch.Tensor:
         """
-        Generates a sequence of probabilities over the vocabulary from a noise vector.
-
+        Forward pass with Gumbel-Softmax sampling for differentiable training.
+        
         Args:
-            z: Input noise vector (batch_size, latent_dim)
-
+            z: Input noise (batch_size, latent_dim)
+            temperature: Softmax temperature (0.1 to 1.0 typical)
+            hard: If True, use straight-through estimator (one-hot vectors)
+        
         Returns:
-            Probabilities over the vocabulary for each step (batch_size, sequence_length, vocab_size)
+            - During training: Sampled token probabilities with Gumbel-Softmax 
+            (batch_size, seq_len, vocab_size)
+            - During eval: Softmax probabilities (batch_size, seq_len, vocab_size)
         """
         batch_size = z.size(0)
-
-        # 1. Project noise to create the initial hidden state for the GRU
-        # Shape needed: (num_layers * directions, batch_size, hidden_size)
-        # For single-layer, unidirectional GRU: (1, batch_size, hidden_dim)
+        
+        # 1. Project noise to initial hidden state
         initial_hidden = self.fc_project(z).unsqueeze(0)  # (1, batch_size, hidden_dim)
-
-        # 2. Prepare the input sequence for the GRU
-        # Repeat the learned input tensor for the entire sequence length and batch size
+        
+        # 2. Prepare GRU input sequence (learned tensor repeated)
         rnn_input_seq = self.learned_input.repeat(batch_size, self.sequence_length, 1)
-        # Shape: (batch_size, sequence_length, hidden_dim)
-
-        # 3. Pass the input sequence and initial hidden state through the GRU
-        # gru_output_seq shape: (batch_size, sequence_length, hidden_dim)
-        # final_hidden shape: (1, batch_size, hidden_dim) - we don't need this here
+        
+        # 3. Forward through GRU
         gru_output_seq, _ = self.gru(rnn_input_seq, initial_hidden)
-
-        # 4. Project the GRU output at each time step to vocabulary logits
-        # Shape: (batch_size, sequence_length, vocab_size)
-        vocab_logits = self.fc_output(gru_output_seq)
-
-        # 5. Apply Softmax to get probabilities over the vocabulary
-        # The Discriminator typically works with probabilities or sampled tokens.
-        # Often, in GAN training, you return logits and use BCEWithLogitsLoss
-        # in the training loop for stability, but conceptual output is probabilities.
-        # Let's return probabilities here for clarity, but remember logits might be needed for training loss.
-        vocab_probs = torch.softmax(vocab_logits, dim=2)
-
-        # The Generator's forward pass typically returns these probabilities or logits.
-        # Sampling (e.g., argmax or multinomial) to get discrete token IDs
-        # happens OUTSIDE the forward method in the training loop or generation function.
-        return vocab_probs
+        
+        # 4. Project to vocabulary logits
+        vocab_logits = self.fc_output(gru_output_seq)  # (batch_size, seq_len, vocab_size)
+        
+        # 5. Gumbel-Softmax sampling (training) or softmax (eval)
+        if self.training:
+            # Differentiable sampling
+            samples = F.gumbel_softmax(
+                vocab_logits, 
+                tau=temperature, 
+                hard=hard,  # Straight-through if hard=True
+                dim=-1
+            )
+            return samples
+        else:
+            # Standard softmax for inference
+            return torch.softmax(vocab_logits, dim=-1)
 
     # Helper method to generate actual token IDs from probabilities (for sampling/evaluation)
     def generate(self, z: torch.Tensor) -> torch.Tensor:

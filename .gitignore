@@ -178,3 +178,9 @@ cython_debug/
 
 # pyenv
 .python-version
+
+# wandb
+wandb/
+
+# checkpoints (for now)
+checkpoints/
