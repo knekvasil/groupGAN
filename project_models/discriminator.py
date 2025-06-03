@@ -75,3 +75,17 @@ class Discriminator(nn.Module):
         out = self.relu(self.fc1(flat))  # Shape: (batch_size, hidden_dim)
         out = self.sigmoid(self.fc2(out))  # Shape: (batch_size, 1)
         return out
+
+    def forward_from_embedding(self, embedded):
+        """
+        Forward pass starting from pre-computed embeddings (e.g., for WGAN-GP).
+        Args:
+            embedded (torch.Tensor): Embedded input of shape (batch_size, sequence_length, embedding_dim)
+        Returns:
+            torch.Tensor: Output probability scores (batch_size, 1)
+        """
+        flat = embedded.view(embedded.size(0), -1)  # Flatten embeddings
+        out = self.relu(self.fc1(flat))
+        out = self.sigmoid(self.fc2(out))
+        return out
+

@@ -10,10 +10,9 @@ import sys
 import os
 import numpy as np
 from tokenizers import Tokenizer
+import torch.autograd as autograd
 
-# Add the project root to the Python path
 sys.path.append(str(Path(__file__).parent.parent))
-
 from project_models.generator import Generator
 from project_models.discriminator import Discriminator
 
@@ -26,53 +25,51 @@ NUM_EPOCHS = 100
 LATENT_DIM = 100
 LEARNING_RATE = 0.0002
 BETA1 = 0.5
+CHECKPOINT_INTERVAL = 5
+USE_GRADIENT_PENALTY = False  # Disabled unless WGAN-GP is used
 
 def load_data():
-    """
-    Loads training and validation data from numpy files and creates DataLoaders.
-    """
     print(f"Loading data from {DATA_DIR}...")
     try:
         X_train = np.load(os.path.join(DATA_DIR, "X_train.npy"))
         y_train = np.load(os.path.join(DATA_DIR, "y_train.npy"))
         X_val = np.load(os.path.join(DATA_DIR, "X_val.npy"))
         y_val = np.load(os.path.join(DATA_DIR, "y_val.npy"))
-        print("Data files loaded successfully.")
     except FileNotFoundError as e:
         print(f"Error loading data files: {e}")
-        print(f"Please ensure data files exist in {DATA_DIR}.")
-        raise e
+        raise
 
-    # Convert to torch tensors
     X_train = torch.tensor(X_train, dtype=torch.long)
     y_train = torch.tensor(y_train, dtype=torch.float32).unsqueeze(1)
     X_val = torch.tensor(X_val, dtype=torch.long)
     y_val = torch.tensor(y_val, dtype=torch.float32).unsqueeze(1)
-    print("Data converted to PyTorch tensors.")
 
     train_dataset = TensorDataset(X_train, y_train)
     val_dataset = TensorDataset(X_val, y_val)
-    print(f"Train dataset size: {len(train_dataset)}")
-    print(f"Val dataset size: {len(val_dataset)}")
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
-    print(f"DataLoaders created with batch size {BATCH_SIZE}.")
-
     return train_loader, val_loader
 
-def gradient_penalty(discriminator, real_data, fake_data, device):
-    batch_size = real_data.size(0)
+def gradient_penalty(discriminator, real_tokens, fake_tokens, device):
+    batch_size = real_tokens.size(0)
+    
+    real_emb = discriminator.embedding(real_tokens)
+    fake_emb = discriminator.embedding(fake_tokens)
+
     epsilon = torch.rand(batch_size, 1, 1, device=device)
-    epsilon = epsilon.expand_as(real_data)
+    interpolated = epsilon * real_emb + (1 - epsilon) * fake_emb
+    interpolated = interpolated.detach().requires_grad_(True)
 
-    interpolated = (epsilon * real_data + (1 - epsilon) * fake_data).requires_grad_(True)
-    interpolated_output = discriminator(interpolated)
+    d_interpolated = discriminator.forward_from_embedding(interpolated)
 
-    gradients = torch.autograd.grad(
-        outputs=interpolated_output,
+    
+    ones = torch.ones_like(d_interpolated, device=device)
+
+    gradients = autograd.grad(
+        outputs=d_interpolated,
         inputs=interpolated,
-        grad_outputs=torch.ones_like(interpolated_output),
+        grad_outputs=ones,
         create_graph=True,
         retain_graph=True,
         only_inputs=True
@@ -89,184 +86,131 @@ def train_gan(
     num_epochs: int,
     latent_dim: int,
     device: torch.device,
-    lr: float = 0.0002,
+    lr: float = 0.0001,
     beta1: float = 0.5,
     use_wandb: bool = True,
+    gp_lambda: float = 10.0,
+    early_stopping_patience: int = 10,
 ):
-    """
-    Train the GAN model.
-    
-    Args:
-        generator: The Generator model
-        discriminator: The Discriminator model
-        train_loader: DataLoader for training data
-        num_epochs: Number of training epochs
-        latent_dim: Dimension of the latent space
-        device: Device to train on (cuda/cpu)
-        lr: Learning rate
-        beta1: Beta1 parameter for Adam optimizer
-        use_wandb: Whether to use Weights & Biases for logging
-    """
-    # Initialize optimizers
-    g_optimizer = optim.Adam(generator.parameters(), lr=lr, betas=(beta1, 0.999))
-    d_optimizer = optim.Adam(discriminator.parameters(), lr=lr, betas=(beta1, 0.999))
-    
-    # Loss function
-    criterion = nn.BCELoss()
-    
-    # Labels for real and fake data
-    real_label = 1.0
-    fake_label = 0.0
-    
-    # Training loop
+    g_optimizer = optim.Adam(generator.parameters(), lr=lr, betas=(beta1, 0.9))
+    d_optimizer = optim.Adam(discriminator.parameters(), lr=lr, betas=(beta1, 0.9))
+
+    best_g_loss = float("inf")
+    best_epoch = 0
+    patience_counter = 0
+
+    save_dir = Path("checkpoints")
+    save_dir.mkdir(exist_ok=True)
+
     for epoch in range(num_epochs):
         generator.train()
         discriminator.train()
-        
-        # Initialize metrics
-        d_losses = []
-        g_losses = []
-        d_real_acc = []
-        d_fake_acc = []
-        
-        progress_bar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}')
-        
+
+        d_losses, g_losses = [], []
+
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+
         for batch_idx, (real_tokens, _) in enumerate(progress_bar):
-            batch_size = real_tokens.size(0)
             real_tokens = real_tokens.to(device)
-            
-            # ---------------------
-            # Train Discriminator
-            # ---------------------
-            lambda_gp = 10
-            d_optimizer.zero_grad()
-            
-            # Train with real data
-            label_real = torch.full((batch_size, 1), real_label, device=device)
-            output_real = discriminator(real_tokens)
-            d_loss_real = criterion(output_real, label_real)
-            
-            # Train with fake data
+            batch_size = real_tokens.size(0)
+
+            # === Train Discriminator ===
+            for _ in range(5):  # multiple D updates per G update
+                noise = torch.randn(batch_size, latent_dim, device=device)
+                fake_tokens = generator.generate(noise).detach()
+
+                d_optimizer.zero_grad()
+                d_real = discriminator(real_tokens)
+                d_fake = discriminator(fake_tokens)
+
+                gp = gradient_penalty(discriminator, real_tokens, fake_tokens, device)
+                d_loss = d_fake.mean() - d_real.mean() + gp_lambda * gp
+                d_loss.backward()
+                d_optimizer.step()
+
+            # === Train Generator ===
             noise = torch.randn(batch_size, latent_dim, device=device)
-            fake_data = generator.generate(noise)
-            label_fake = torch.full((batch_size, 1), fake_label, device=device)
-            output_fake = discriminator(fake_data.detach())
-            d_loss_fake = criterion(output_fake, label_fake)
-            
-            # Total discriminator loss
-            d_loss = d_loss_real + d_loss_fake
-            d_loss.backward()
-            d_optimizer.step()
-            
-            # ---------------------
-            # Train Generator
-            # ---------------------
+            fake_probs = generator(noise, temperature=0.5, hard=True)
+            fake_tokens = fake_probs.argmax(dim=-1)
             g_optimizer.zero_grad()
 
-            # Generate new fake data with Gumbel-Softmax
-            noise = torch.randn(batch_size, latent_dim, device=device)
-            fake_data_probs = generator(noise, temperature=0.5, hard=True)  # Differentiable sampling
-            fake_tokens = fake_data_probs.argmax(dim=-1)  # Convert to token IDs
-            output_fake = discriminator(fake_tokens)
-
-            # Generator wants to fool discriminator
-            g_loss = criterion(output_fake, label_real)
+            d_fake = discriminator(fake_tokens)
+            g_loss = -d_fake.mean()
             g_loss.backward()
             g_optimizer.step()
-                    
-            # Calculate metrics
+
             d_losses.append(d_loss.item())
             g_losses.append(g_loss.item())
-            d_real_acc.append((output_real > 0.5).float().mean().item())
-            d_fake_acc.append((output_fake < 0.5).float().mean().item())
-            
-            # Update progress bar
+
             progress_bar.set_postfix({
-                'D_loss': f'{d_loss.item():.4f}',
-                'G_loss': f'{g_loss.item():.4f}',
-                'D_real_acc': f'{(output_real > 0.5).float().mean().item():.4f}',
-                'D_fake_acc': f'{(output_fake < 0.5).float().mean().item():.4f}'
+                "D_loss": f"{d_loss.item():.4f}",
+                "G_loss": f"{g_loss.item():.4f}"
             })
-            
-            # Log to wandb
+
             if use_wandb and batch_idx % 100 == 0:
                 wandb.log({
-                    'd_loss': d_loss.item(),
-                    'g_loss': g_loss.item(),
-                    'd_real_acc': (output_real > 0.5).float().mean().item(),
-                    'd_fake_acc': (output_fake < 0.5).float().mean().item(),
-                    'epoch': epoch,
-                    'batch': batch_idx
+                    "d_loss": d_loss.item(),
+                    "g_loss": g_loss.item(),
+                    "epoch": epoch,
+                    "batch": batch_idx
                 })
-        
-        # Print epoch statistics
-        print(f'\nEpoch {epoch+1}/{num_epochs}:')
-        print(f'D_loss: {sum(d_losses)/len(d_losses):.4f}')
-        print(f'G_loss: {sum(g_losses)/len(g_losses):.4f}')
-        print(f'D_real_acc: {sum(d_real_acc)/len(d_real_acc):.4f}')
-        print(f'D_fake_acc: {sum(d_fake_acc)/len(d_fake_acc):.4f}')
-        
-        # Save models periodically
+
+        avg_g_loss = sum(g_losses) / len(g_losses)
+        avg_d_loss = sum(d_losses) / len(d_losses)
+
+        print(f"\nEpoch {epoch+1}: G_loss = {avg_g_loss:.4f}, D_loss = {avg_d_loss:.4f}")
+
+        # Save best generator
+        if avg_g_loss < best_g_loss:
+            best_g_loss = avg_g_loss
+            best_epoch = epoch
+            patience_counter = 0
+            torch.save(generator.state_dict(), save_dir / "generator_best.pt")
+            torch.save(discriminator.state_dict(), save_dir / "discriminator_best.pt")
+            print("Saved new best models.")
+        else:
+            patience_counter += 1
+            print(f"No improvement. Patience {patience_counter}/{early_stopping_patience}")
+
+        # Early stopping
+        if patience_counter >= early_stopping_patience:
+            print(f"\nEarly stopping at epoch {epoch+1}")
+            break
+
+        # Optional periodic saving
         if (epoch + 1) % 5 == 0:
-            save_dir = Path('checkpoints')
-            save_dir.mkdir(exist_ok=True)
-            torch.save(generator.state_dict(), save_dir / f'generator_epoch_{epoch+1}.pt')
-            torch.save(discriminator.state_dict(), save_dir / f'discriminator_epoch_{epoch+1}.pt')
+            torch.save(generator.state_dict(), save_dir / f"generator_epoch_{epoch+1}.pt")
+            torch.save(discriminator.state_dict(), save_dir / f"discriminator_epoch_{epoch+1}.pt")
+
 
 def main():
-    # Device configuration
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'Using device: {device}')
-    
-    # Initialize wandb
-    """
-    # TODO: Add wandb logging once all errors are fixed
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
-    wandb.init(project="group-gan", config={
-        "architecture": "GAN",
-        "dataset": "titles",
-        "epochs": NUM_EPOCHS,
-        "batch_size": BATCH_SIZE,
-        "latent_dim": LATENT_DIM,
-        "learning_rate": LEARNING_RATE
-    })
-     """   
-    # Load tokenizer to get vocab size
-    print("Loading tokenizer to get vocab size...")
     try:
-        # Convert to absolute path to ensure we can find the file
-        tokenizer_path = Path(__file__).parent.parent / "project_data" / "hf_tokenizer.json"
-        print(f"Looking for tokenizer at: {tokenizer_path}")
-        tokenizer = Tokenizer.from_file(str(tokenizer_path))
+        tokenizer = Tokenizer.from_file(TOKENIZER_PATH)
         vocab_size = tokenizer.get_vocab_size()
-        print(f"Tokenizer loaded. Vocab size: {vocab_size}")
-    except FileNotFoundError:
-        print(f"Error: Tokenizer file not found at {tokenizer_path}")
-        print("Please ensure the tokenizer file exists in the project_data directory.")
-        sys.exit(1)
     except Exception as e:
-        print(f"An error occurred loading the tokenizer: {e}")
+        print(f"Tokenizer loading failed: {e}")
         sys.exit(1)
-    
-    # Load data
+
     try:
         train_loader, val_loader = load_data()
     except FileNotFoundError:
         sys.exit(1)
-    
-    # Initialize models
+
     generator = Generator(
         latent_dim=LATENT_DIM,
         vocab_size=vocab_size,
         sequence_length=SEQUENCE_LENGTH
     ).to(device)
-    
+
     discriminator = Discriminator(
         vocab_size=vocab_size,
         sequence_length=SEQUENCE_LENGTH
     ).to(device)
-    
-    # Train the GAN
+
+    # wandb.init(...)
     train_gan(
         generator=generator,
         discriminator=discriminator,
@@ -276,16 +220,16 @@ def main():
         device=device,
         lr=LEARNING_RATE,
         beta1=BETA1,
-        use_wandb=False # True
+        use_wandb=False,
+        gp_lambda=10.0,
+        early_stopping_patience=10,
     )
-    
-    # Save final models
-    save_dir = Path('checkpoints')
-    save_dir.mkdir(exist_ok=True)
-    torch.save(generator.state_dict(), save_dir / 'generator_final.pt')
-    torch.save(discriminator.state_dict(), save_dir / 'discriminator_final.pt')
-    
-    wandb.finish()
 
-if __name__ == '__main__':
+    save_dir = Path("checkpoints")
+    save_dir.mkdir(exist_ok=True)
+    torch.save(generator.state_dict(), save_dir / "generator_final.pt")
+    torch.save(discriminator.state_dict(), save_dir / "discriminator_final.pt")
+    # wandb.finish()
+
+if __name__ == "__main__":
     main()
