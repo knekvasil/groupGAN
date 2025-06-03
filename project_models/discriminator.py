@@ -1,4 +1,5 @@
-# project_models/discriminator.py
+# project_models/discriminator
+
 """
 This module defines the Discriminator model for a Generative Adversarial Network (GAN)
 or a similar setup where a model needs to classify sequences (like text) as real or fake.
@@ -9,6 +10,7 @@ to produce a single probability score indicating the likelihood of the input
 sequence being "real".
 """
 
+import torch
 import torch.nn as nn
 
 
@@ -17,8 +19,7 @@ class Discriminator(nn.Module):
     A simple feed-forward Discriminator model for classifying sequences.
 
     The model embeds input token sequences, flattens the embeddings, and uses
-    dense layers followed by a Sigmoid activation to output a probability
-    score for the input being real.
+    dense layers to output a score for the input being real (no sigmoid for WGAN-GP).
 
     Attributes:
         sequence_length (int): The fixed length of the input sequences.
@@ -26,7 +27,7 @@ class Discriminator(nn.Module):
         fc1 (nn.Linear): First fully connected layer.
         relu (nn.ReLU): ReLU activation function.
         fc2 (nn.Linear): Second fully connected layer (output layer).
-        sigmoid (nn.Sigmoid): Sigmoid activation to output a probability.
+        # Sigmoid removed for WGAN-GP
     """
 
     def __init__(
@@ -47,45 +48,64 @@ class Discriminator(nn.Module):
         """
         super().__init__()
         self.sequence_length = sequence_length
+        self.embedding_dim = (
+            embedding_dim  # Store for potential use in forward_from_embedding
+        )
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
+
+        # The input size for fc1 is based on the flattened embeddings
         self.fc1 = nn.Linear(embedding_dim * sequence_length, hidden_dim)
         self.relu = nn.ReLU()
+        # Final layer outputs a single score, NOT a probability (no sigmoid here for WGAN-GP)
         self.fc2 = nn.Linear(hidden_dim, 1)
-        self.sigmoid = nn.Sigmoid()
+        # self.sigmoid = nn.Sigmoid() # REMOVED for WGAN-GP
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor):
         """
         Performs the forward pass of the Discriminator.
+        This method expects discrete token IDs (torch.long).
 
         Args:
             x (torch.Tensor): Input tensor containing sequences of token IDs.
                               Expected shape is (batch_size, sequence_length).
 
         Returns:
-            torch.Tensor: Output tensor containing the probability of each input
+            torch.Tensor: Output tensor containing the score of each input
                           sequence being real. Shape is (batch_size, 1).
         """
+        # Ensure input is long type for embedding lookup
+        if x.dtype != torch.long:
+            x = x.long()
+
         embedded = self.embedding(
             x
         )  # Shape: (batch_size, sequence_length, embedding_dim)
-        # Flatten the embedded sequences
-        flat = embedded.view(
-            x.size(0), -1
-        )  # Shape: (batch_size, sequence_length * embedding_dim)
-        out = self.relu(self.fc1(flat))  # Shape: (batch_size, hidden_dim)
-        out = self.sigmoid(self.fc2(out))  # Shape: (batch_size, 1)
-        return out
 
-    def forward_from_embedding(self, embedded):
+        # Pass the embedded sequence to the internal forward_from_embedding method
+        # This allows re-using the main logic for both direct calls and GP calls
+        return self.forward_from_embedding(embedded)
+
+    def forward_from_embedding(self, embedded: torch.Tensor):
         """
         Forward pass starting from pre-computed embeddings (e.g., for WGAN-GP).
+        This method expects continuous embeddings (torch.float).
+
         Args:
             embedded (torch.Tensor): Embedded input of shape (batch_size, sequence_length, embedding_dim)
         Returns:
-            torch.Tensor: Output probability scores (batch_size, 1)
+            torch.Tensor: Output scores (batch_size, 1)
         """
-        flat = embedded.view(embedded.size(0), -1)  # Flatten embeddings
+        # Ensure input is float type for calculations
+        if embedded.dtype != torch.float:
+            embedded = embedded.float()
+
+        # Flatten embeddings
+        # Ensure the view operation matches the expected input dimension for fc1
+        # It should be (batch_size, sequence_length * embedding_dim)
+        flat = embedded.view(embedded.size(0), -1)
+
         out = self.relu(self.fc1(flat))
-        out = self.sigmoid(self.fc2(out))
+        # No sigmoid here, output raw scores for WGAN-GP
+        out = self.fc2(out)
         return out
 
