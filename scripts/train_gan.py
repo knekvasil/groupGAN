@@ -18,8 +18,10 @@ from project_models.discriminator import Discriminator
 
 # --- Config ---
 DATA_DIR = str(Path(__file__).parent.parent / "project_data" / "processed")
-TOKENIZER_PATH = str(Path(__file__).parent.parent / "project_data" / "hf_tokenizer.json")
-SEQUENCE_LENGTH = 20
+TOKENIZER_PATH = str(
+    Path(__file__).parent.parent / "project_data" / "hf_tokenizer.json"
+)
+SEQUENCE_LENGTH = 10
 BATCH_SIZE = 64
 NUM_EPOCHS = 100
 LATENT_DIM = 100
@@ -27,6 +29,7 @@ LEARNING_RATE = 0.0002
 BETA1 = 0.5
 CHECKPOINT_INTERVAL = 5
 USE_GRADIENT_PENALTY = False  # Disabled unless WGAN-GP is used
+
 
 def load_data():
     print(f"Loading data from {DATA_DIR}...")
@@ -51,9 +54,10 @@ def load_data():
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
     return train_loader, val_loader
 
+
 def gradient_penalty(discriminator, real_tokens, fake_tokens, device):
     batch_size = real_tokens.size(0)
-    
+
     real_emb = discriminator.embedding(real_tokens)
     fake_emb = discriminator.embedding(fake_tokens)
 
@@ -63,7 +67,6 @@ def gradient_penalty(discriminator, real_tokens, fake_tokens, device):
 
     d_interpolated = discriminator.forward_from_embedding(interpolated)
 
-    
     ones = torch.ones_like(d_interpolated, device=device)
 
     gradients = autograd.grad(
@@ -72,12 +75,13 @@ def gradient_penalty(discriminator, real_tokens, fake_tokens, device):
         grad_outputs=ones,
         create_graph=True,
         retain_graph=True,
-        only_inputs=True
+        only_inputs=True,
     )[0]
 
     gradients = gradients.view(batch_size, -1)
     gp = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
     return gp
+
 
 def train_gan(
     generator: Generator,
@@ -142,23 +146,26 @@ def train_gan(
             d_losses.append(d_loss.item())
             g_losses.append(g_loss.item())
 
-            progress_bar.set_postfix({
-                "D_loss": f"{d_loss.item():.4f}",
-                "G_loss": f"{g_loss.item():.4f}"
-            })
+            progress_bar.set_postfix(
+                {"D_loss": f"{d_loss.item():.4f}", "G_loss": f"{g_loss.item():.4f}"}
+            )
 
             if use_wandb and batch_idx % 100 == 0:
-                wandb.log({
-                    "d_loss": d_loss.item(),
-                    "g_loss": g_loss.item(),
-                    "epoch": epoch,
-                    "batch": batch_idx
-                })
+                wandb.log(
+                    {
+                        "d_loss": d_loss.item(),
+                        "g_loss": g_loss.item(),
+                        "epoch": epoch,
+                        "batch": batch_idx,
+                    }
+                )
 
         avg_g_loss = sum(g_losses) / len(g_losses)
         avg_d_loss = sum(d_losses) / len(d_losses)
 
-        print(f"\nEpoch {epoch+1}: G_loss = {avg_g_loss:.4f}, D_loss = {avg_d_loss:.4f}")
+        print(
+            f"\nEpoch {epoch+1}: G_loss = {avg_g_loss:.4f}, D_loss = {avg_d_loss:.4f}"
+        )
 
         # Save best generator
         if avg_g_loss < best_g_loss:
@@ -170,7 +177,9 @@ def train_gan(
             print("Saved new best models.")
         else:
             patience_counter += 1
-            print(f"No improvement. Patience {patience_counter}/{early_stopping_patience}")
+            print(
+                f"No improvement. Patience {patience_counter}/{early_stopping_patience}"
+            )
 
         # Early stopping
         if patience_counter >= early_stopping_patience:
@@ -179,8 +188,13 @@ def train_gan(
 
         # Optional periodic saving
         if (epoch + 1) % 5 == 0:
-            torch.save(generator.state_dict(), save_dir / f"generator_epoch_{epoch+1}.pt")
-            torch.save(discriminator.state_dict(), save_dir / f"discriminator_epoch_{epoch+1}.pt")
+            torch.save(
+                generator.state_dict(), save_dir / f"generator_epoch_{epoch+1}.pt"
+            )
+            torch.save(
+                discriminator.state_dict(),
+                save_dir / f"discriminator_epoch_{epoch+1}.pt",
+            )
 
 
 def main():
@@ -200,17 +214,25 @@ def main():
         sys.exit(1)
 
     generator = Generator(
-        latent_dim=LATENT_DIM,
-        vocab_size=vocab_size,
-        sequence_length=SEQUENCE_LENGTH
+        latent_dim=LATENT_DIM, vocab_size=vocab_size, sequence_length=SEQUENCE_LENGTH
     ).to(device)
 
     discriminator = Discriminator(
-        vocab_size=vocab_size,
-        sequence_length=SEQUENCE_LENGTH
+        vocab_size=vocab_size, sequence_length=SEQUENCE_LENGTH
     ).to(device)
 
-    # wandb.init(...)
+    wandb.init(
+        project="group-gan",
+        config={
+            "architecture": "GAN",
+            "dataset": "titles",
+            "epochs": NUM_EPOCHS,
+            "batch_size": BATCH_SIZE,
+            "latent_dim": LATENT_DIM,
+            "learning_rate": LEARNING_RATE,
+        },
+    )
+
     train_gan(
         generator=generator,
         discriminator=discriminator,
@@ -220,7 +242,7 @@ def main():
         device=device,
         lr=LEARNING_RATE,
         beta1=BETA1,
-        use_wandb=False,
+        use_wandb=True,
         gp_lambda=10.0,
         early_stopping_patience=10,
     )
@@ -229,7 +251,8 @@ def main():
     save_dir.mkdir(exist_ok=True)
     torch.save(generator.state_dict(), save_dir / "generator_final.pt")
     torch.save(discriminator.state_dict(), save_dir / "discriminator_final.pt")
-    # wandb.finish()
+    wandb.finish()
+
 
 if __name__ == "__main__":
     main()
