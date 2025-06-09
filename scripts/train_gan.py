@@ -21,7 +21,7 @@ DATA_DIR = str(Path(__file__).parent.parent / "project_data" / "processed")
 TOKENIZER_PATH = str(
     Path(__file__).parent.parent / "project_data" / "hf_tokenizer.json"
 )
-SEQUENCE_LENGTH = 10
+SEQUENCE_LENGTH = 20
 BATCH_SIZE = 64
 NUM_EPOCHS = 100
 LATENT_DIM = 100
