@@ -1,0 +1,53 @@
+lrwxrwxrwx. 1 jaredmichael users 130 Jun  9 19:25 /gpfs/helios/home/jaredmichael/groupGAN-master/gan_env/bin/python -> /gpfs/space/software/cluster_software/spack/linux-rhel9-x86_64/gcc-9.2.0/python-3.9.12-kt3aa43dahisvqfaa357zkgcyh3nuq7p/bin/python
+Using device: cuda
+Loading data from /gpfs/helios/home/jaredmichael/groupGAN-master/project_data/processed...
+
+Epoch 1: G_loss = -0.0511, D_loss = -0.2929
+Saved new best models.
+
+Epoch 2: G_loss = -0.0368, D_loss = -0.3222
+No improvement. Patience 1/10
+
+Epoch 3: G_loss = -0.0401, D_loss = -0.3743
+No improvement. Patience 2/10
+
+Epoch 4: G_loss = -0.0534, D_loss = -0.4594
+Saved new best models.
+
+Epoch 5: G_loss = -0.0606, D_loss = -0.5410
+Saved new best models.
+
+Epoch 6: G_loss = -0.0614, D_loss = -0.6346
+Saved new best models.
+
+Epoch 7: G_loss = -0.0594, D_loss = -0.6382
+No improvement. Patience 1/10
+
+Epoch 8: G_loss = -0.0590, D_loss = -0.5865
+No improvement. Patience 2/10
+
+Epoch 9: G_loss = -0.0538, D_loss = -0.4851
+No improvement. Patience 3/10
+
+Epoch 10: G_loss = -0.0484, D_loss = -0.5918
+No improvement. Patience 4/10
+
+Epoch 11: G_loss = -0.0476, D_loss = -0.6563
+No improvement. Patience 5/10
+
+Epoch 12: G_loss = -0.0430, D_loss = -0.7285
+No improvement. Patience 6/10
+
+Epoch 13: G_loss = -0.0390, D_loss = -0.7682
+No improvement. Patience 7/10
+
+Epoch 14: G_loss = -0.0382, D_loss = -0.7689
+No improvement. Patience 8/10
+
+Epoch 15: G_loss = -0.0386, D_loss = -0.6293
+No improvement. Patience 9/10
+
+Epoch 16: G_loss = -0.0331, D_loss = -0.2987
+No improvement. Patience 10/10
+
+Early stopping at epoch 16
